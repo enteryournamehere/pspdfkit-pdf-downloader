@@ -100,6 +100,7 @@
   let auth_response = await auth_request.json();
   let pdfkit_token = auth_response.token;
   let layer_handle = auth_response.layerHandle;
+  let image_token = auth_response.imageToken;
 
   updateStatus('Getting book info...');
 
@@ -158,6 +159,7 @@
       credentials: 'include',
       headers: {
         Accept: 'image/webp',
+        'X-Pspdfkit-Image-Token': image_token,
       },
       method: 'GET',
       mode: 'cors',
