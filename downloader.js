@@ -1,20 +1,18 @@
 // To be used as a bookmarklet or similar.
 // For sites using pspdfkit to prevent PDF downloads. This script 
-// requests each page as an image and bundles those into a zip.
+// requests each page as an image and bundles those into a pdf.
 // I think it works for next.js+pspdfkit websites. May have something
 // to do with React, not sure, it looks for a "#__NEXT_DATA__" block.
 // One such website is the "boom voortgezet onderwijs" website.
-// You may want to edit the desired_width variable to get a higher 
-// resolution - at the cost of an increased filesize.
 // If nothing happens when running this, try reloading the page,
 // otherwise the next.js data may be incomplete.
 
 (async function () {
-  if (typeof JSZip === 'undefined') {
+  if (typeof jsPDF === 'undefined') {
     const el = document.createElement('script');
     el.setAttribute(
       'src',
-      'https://cdnjs.cloudflare.com/ajax/libs/jszip/3.7.1/jszip.min.js'
+      'https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js'
     );
     document.body.append(el);
   }
@@ -52,6 +50,7 @@
   div.style.fontSize = '50px';
   div.style.color = 'white';
   div.style.padding = '10px';
+  div.style.zIndex = '10000';
 
   document.body.appendChild(div);
 
@@ -72,6 +71,14 @@
 
   updateStatus('Reading properties...');
   const { base_url, jwt, isbn, title } = get_book_properties();
+
+  if (title != JSON.parse(document.getElementById('Book').innerHTML).name) {
+    alert('Outdated book properties found, please reload the page.');
+
+    // remove progress indicator
+    document.body.removeChild(div);
+    return;
+  }
 
   updateStatus('Authenticating...');
   /// AUTH
@@ -131,7 +138,10 @@
   const aspect_ratio =
     document_response.data.pages[0].width /
     document_response.data.pages[0].height;
-  const desired_width = 650;
+  const default_width = 900;
+  let desired_width = prompt('Enter desired resolution of pages (width, in pixels):', default_width);
+  desired_width = parseInt(desired_width);
+  if (isNaN(desired_width) || desired_width <= 0) desired_width = default_width;
   const desired_height = Math.round(desired_width / aspect_ratio);
 
   function generate_image_url(page, width, height) {
@@ -169,44 +179,67 @@
   }
 
   async function main() {
-    const zip = new JSZip();
-
+    const pdf = new jsPDF({
+      orientation: aspect_ratio > 1 ? 'landscape' : 'portrait',
+      unit: 'pt',
+      format: [desired_width, desired_height]
+    });
     console.log(`Downloading ${number_of_pages} pages...`);
-
     updateStatus('Downloading...');
 
-    const batch_size = 10;
-
+    const batch_size = 15;
+    
     for (let i = 0; i < number_of_pages; i += batch_size) {
       const promises = [];
-      for (let j = i; j < number_of_pages && j < i + batch_size; j++) {
-        promises.push(getAndAddBlobToZip(zip, j));
+      const endIndex = Math.min(i + batch_size, number_of_pages);
+      
+      for (let j = i; j < endIndex; j++) {
+        promises.push(downloadPage(j));
       }
-      await Promise.all(promises);
+
+      const results = await Promise.all(promises);
+      
+      // once batch is downloaded, add to pdf one by one
+      for (let j = 0; j < results.length; j++) {
+        const pageIndex = i + j;
+        
+        if (pageIndex > 0) {
+          pdf.addPage([desired_width, desired_height]);
+        }
+        
+        pdf.addImage(
+          results[j], 
+          'WEBP', 
+          0, 
+          0, 
+          desired_width, 
+          desired_height
+        );
+        
+        URL.revokeObjectURL(results[j]);
+      }
+      
       updateProgress(((i + batch_size) / number_of_pages) * 100);
     }
 
-    updateStatus('Creating zip...');
-    const content = await zip.generateAsync({ type: 'blob' });
-
+    updateStatus('Creating PDF...');
+    
     // remove progress indicator
     document.body.removeChild(div);
 
-    // download zip
-    const downloadLink = document.createElement('a');
-    downloadLink.href = URL.createObjectURL(content);
-    downloadLink.download = `${title}.zip`;
-    downloadLink.click();
+    // download pdf
+    pdf.save(`${title}.pdf`);
   }
 
-  async function getAndAddBlobToZip(zip, pageIndex) {
+  async function downloadPage(pageIndex) {
     const blob = await get_page_blob(pageIndex);
-    zip.file(`page-${pageIndex.toString().padStart(4, '0')}.webp`, blob);
+    return URL.createObjectURL(blob);
   }
 
-  let jszip_checker = setInterval(async () => {
-    if (typeof JSZip !== 'undefined') {
-      clearInterval(jszip_checker);
+  let jspdf_checker = setInterval(async () => {
+    if (typeof window.jspdf !== 'undefined') {
+      jsPDF = window.jspdf.jsPDF;
+      clearInterval(jspdf_checker);
       await main();
     }
   }, 1000);
